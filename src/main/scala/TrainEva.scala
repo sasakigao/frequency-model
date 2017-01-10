@@ -1,49 +1,52 @@
-import scala.collection.mutable._
 import org.apache.spark.SparkContext
 import org.apache.spark.SparkContext._
 import org.apache.spark.mllib.linalg.{Vectors, Vector}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
 import org.apache.spark.mllib.classification.{SVMWithSGD, LogisticRegressionWithLBFGS, NaiveBayes}
-import org.apache.spark.mllib.tree.{DecisionTree}
+import org.apache.spark.mllib.tree.{DecisionTree, RandomForest}
 import org.apache.spark.mllib.tree.configuration.{Strategy}
 import org.apache.spark.mllib.tree.configuration.Algo._
 import org.apache.spark.mllib.tree.impurity._
 import org.apache.spark.rdd.RDD
 
-
+/**
+ * 5 models altogther.
+ * SVM, logistic regression, tree, random forests and naive bayes.
+ */
 object TrainEva {
 	val svmMetricsPathHDFS = "hdfs:///netease/blend/metrics/svm/"
 	val treeMetricsPathHDFS = "hdfs:///netease/blend/metrics/tree/"
 	val logisticMetricsPathHDFS = "hdfs:///netease/blend/metrics/logistic/"
 	val bayesMetricsPathHDFS = "hdfs:///netease/blend/metrics/bayes/"
+	val forestMetricsPathHDFS = "hdfs:///netease/blend/metrics/forest/"
 
- 	def trainAndEvaSVM(trainingRDD : RDD[LabeledPoint], testRDD : RDD[LabeledPoint], sc : SparkContext) = {
-  		val modelSVM = SVMWithSGD.train(trainingRDD, 100)
-		modelSVM.clearThreshold()
-		// model.setThreshold(0.8)		
+ 	def trainAndEvaSVM(trainingRDD : RDD[LabeledPoint], testRDD : RDD[LabeledPoint], sc : SparkContext, timeStr : String) = {
+  		val modelSVM = SVMWithSGD.train(trainingRDD, 100).clearThreshold()
+		// modelSVM.setThreshold(0.8)		
 		val scoresAndLabels = testRDD.map{ point =>
  	 		val score = modelSVM.predict(point.features)
   			(score, point.label)
 		}
-		binaryScoresMetricsOutput(scoresAndLabels, svmMetricsPathHDFS, sc)
+		binaryScoresMetricsOutput(scoresAndLabels, svmMetricsPathHDFS + timeStr, sc)
   	}	
 
-  	def trainAndEvaLogistic(trainingRDD : RDD[LabeledPoint], testRDD : RDD[LabeledPoint], sc : SparkContext) = {
+  	def trainAndEvaLogistic(trainingRDD : RDD[LabeledPoint], testRDD : RDD[LabeledPoint], sc : SparkContext, timeStr : String) = {
   		val modelLogistic = new LogisticRegressionWithLBFGS()
-  			.setNumClasses(10)
+  			.setNumClasses(2)
   			.run(trainingRDD)
+  			.clearThreshold()
 		val scoresAndLabels = testRDD.map{ point =>
  	 		val score = modelLogistic.predict(point.features)
   			(score, point.label)
 		}
-		binaryScoresMetricsOutput(scoresAndLabels, logisticMetricsPathHDFS, sc)
+		binaryScoresMetricsOutput(scoresAndLabels, logisticMetricsPathHDFS + timeStr, sc)
   	}
 
-  	def trainAndEvaTree(trainingRDD : RDD[LabeledPoint], testRDD : RDD[LabeledPoint], sc : SparkContext) = {
+  	def trainAndEvaTree(trainingRDD : RDD[LabeledPoint], testRDD : RDD[LabeledPoint], sc : SparkContext, timeStr : String) = {
   		val algo = Classification
 		val impurity = Gini
-		val maxDepth = 5
+		val maxDepth = 10
   		val numClasses = 2
 		val maxBins = 32
 		val categoricalFeaturesInfo = Map[Int, Int]()
@@ -54,10 +57,28 @@ object TrainEva {
  	 		val predication = modelTree.predict(point.features)
   			(predication, point.label)
 		}
-		binaryPredicationMetricsOutput(predicationsAndLabels, treeMetricsPathHDFS, sc)
+		binaryPredicationMetricsOutput(predicationsAndLabels, treeMetricsPathHDFS + timeStr, sc)
+  	}
+  	
+  	def trainAndEvaForest(trainingRDD : RDD[LabeledPoint], testRDD : RDD[LabeledPoint], sc : SparkContext, timeStr : String) = {
+  		val numClasses = 2
+		val categoricalFeaturesInfo = Map[Int, Int]()
+		val numTrees = 13
+		val featureSubsetStrategy = "auto"
+		val impurity = "gini"
+		val maxDepth = 10
+		val maxBins = 32
+		val modelForest = RandomForest.trainClassifier(trainingRDD, numTrees, categoricalFeaturesInfo, 
+			numTrees, featureSubsetStrategy, impurity, maxDepth, maxBins)
+		val predicationsAndLabels = testRDD.map{ point =>
+ 	 		val predication = modelForest.predict(point.features)
+  			(predication, point.label)
+		}
+		binaryPredicationMetricsOutput(predicationsAndLabels, forestMetricsPathHDFS + timeStr, sc)
   	}
 
-  	def trainAndEvaBayes(trainingRDD : RDD[LabeledPoint], testRDD : RDD[LabeledPoint], sc : SparkContext) = {
+  	// Mind that features must be nonnegative.
+  	def trainAndEvaBayes(trainingRDD : RDD[LabeledPoint], testRDD : RDD[LabeledPoint], sc : SparkContext, timeStr : String) = {
   		val modelBayes = new NaiveBayes()
   			.setLambda(1.0)
   			.setModelType("multinomial")
@@ -66,7 +87,7 @@ object TrainEva {
  	 		val prediction = modelBayes.predict(point.features)
   			(prediction, point.label)
 		}
-		binaryPredicationMetricsOutput(predicationsAndLabels, bayesMetricsPathHDFS, sc)
+		binaryPredicationMetricsOutput(predicationsAndLabels, bayesMetricsPathHDFS + timeStr, sc)
   	}
 
   	def binaryScoresMetricsOutput(scoresAndLabels : RDD[(Double, Double)], metricsPath : String, sc : SparkContext) = {
@@ -94,3 +115,4 @@ object TrainEva {
   	}
 
 }
+

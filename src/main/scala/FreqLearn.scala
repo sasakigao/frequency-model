@@ -11,6 +11,7 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.rdd.RDD
 
 import java.text.SimpleDateFormat
+import java.util.Date
 
 
 object FreqLearn {
@@ -28,8 +29,9 @@ object FreqLearn {
 	val positiveValidDurationsHDFS= "hdfs:///netease/blend/players/valid-duration-positive/"
 	val labelFeaturesHDFS = "hdfs:///netease/blend/features/"
 
-	val Postive = 0.0
-	val Negative = 1.0
+	val isPostive = 0.0
+	val isNegative = 1.0
+	val timeNow = getTime()
 
 	def main(args: Array[String]) = {
 	  	val confSpark = new SparkConf().setAppName(appName)
@@ -63,7 +65,7 @@ object FreqLearn {
 		}.filter(x => x._1 != None && x._2._1 != None && x._2._2 != None)
 		.map{ case (x, (a, b)) => ((x.get, b.get.split(" ")(0)), (a.get, toMillis(b.get)))}
 		.groupByKey
-		playerRefinedRDD.persist()
+		.persist()
 		Validation.totalPlayersCollect(playerRefinedRDD, totalPlayersHDFS, false)
 
 		// Players whose login times equal to logout
@@ -78,8 +80,8 @@ object FreqLearn {
 		}
 
 		val labelledActFreqRDD = actFreqRDD.map{ case (playerTime, actResults) =>
-			if ((pluginLookupBc.value)(playerTime._2) contains playerTime._1) LabeledPoint(1.0, Vectors.dense(actResults))
-				else LabeledPoint(0.0, Vectors.dense(actResults))
+			if ((pluginLookupBc.value)(playerTime._2) contains playerTime._1) LabeledPoint(isPostive, Vectors.dense(actResults))
+				else LabeledPoint(isNegative, Vectors.dense(actResults))
 		}
 		
 		playerRefinedRDD.unpersist(true)
@@ -89,24 +91,22 @@ object FreqLearn {
 
 		// Save the labelled features in MLLib format
 		labelledActFreqRDD.persist()
-		// MLUtils.saveAsLibSVMFile(labelledActFreqRDD.repartition(5), labelFeaturesHDFS)
+		MLUtils.saveAsLibSVMFile(labelledActFreqRDD.repartition(5), labelFeaturesHDFS)
 
 		// Training part. Features normalized. 
 		// val labelledActFreqRDD = MLUtils.loadLibSVMFile(sc, labelFeaturesHDFS, 200)
 		val normalizer = new Normalizer()
 		val normalizedLabelledActFreqRDD = labelledActFreqRDD.map(x => LabeledPoint(x.label, normalizer.transform(x.features)))
-  		val splits = normalizedLabelledActFreqRDD.randomSplit(Array(0.8, 0.2), seed = 22L)
-		val trainingRDD = splits(0)
-		val testRDD = splits(1)
-		trainingRDD.persist()
-		testRDD.persist()
+  		val splits = normalizedLabelledActFreqRDD.randomSplit(Array(0.7, 0.3), seed = 22L)
+		val trainingRDD = splits(0).persist()
+		val testRDD = splits(1).persist()
 		println(s"sasaki -train ${trainingRDD.filter(_.label == 0).count} ${trainingRDD.filter(_.label == 1.0).count}")
 		println(s"sasaki -test ${testRDD.filter(_.label == 0).count} ${testRDD.filter(_.label == 1.0).count}")
 
-		TrainEva.trainAndEvaSVM(trainingRDD, testRDD, sc)
-		TrainEva.trainAndEvaLogistic(trainingRDD, testRDD, sc)
-		TrainEva.trainAndEvaTree(trainingRDD, testRDD, sc)
-		TrainEva.trainAndEvaBayes(trainingRDD, testRDD, sc)
+		TrainEva.trainAndEvaSVM(trainingRDD, testRDD, sc, timeNow)
+		TrainEva.trainAndEvaLogistic(trainingRDD, testRDD, sc, timeNow)
+		TrainEva.trainAndEvaTree(trainingRDD, testRDD, sc, timeNow)
+		TrainEva.trainAndEvaBayes(trainingRDD, testRDD, sc, timeNow)
 		
 		labelledActFreqRDD.unpersist(true)
 		trainingRDD.unpersist(true)
@@ -135,7 +135,7 @@ object FreqLearn {
   	def timeXtract(logLine : String) = {
   		val pattern = """^2016-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}""".r
   		val matchRes = pattern.findFirstIn(logLine)
-  		if (matchRes != None) Some(matchRes.get.split('[').last) else None
+  		if (matchRes != None) Some(matchRes.get) else None
   	}
   	// Also judge whether the operation is targetted, if not return None
   	def playerXtract(logLine : String, opeId : Option[String], 
@@ -156,6 +156,12 @@ object FreqLearn {
   	def toMillis(timestamp : String) = {
   		val sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
   		sdf.parse(timestamp).getTime
+  	}
+
+  	def getTime() = {
+  		val dt = new Date()
+     		val sdf = new SimpleDateFormat("yyyyMMddHHmmss")
+     		sdf.format(dt)
   	}
 
 }
